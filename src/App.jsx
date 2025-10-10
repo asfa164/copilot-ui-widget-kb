@@ -7,21 +7,17 @@ export default function App() {
   const [token, setToken] = useState('')
 
   async function verifyToken(inputToken) {
-    try {
-      const res = await fetch('/api/verify-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: inputToken })
-      })
-      const data = await res.json()
-      if (res.ok && data.valid) {
-        setToken(inputToken)
-        setVerified(true)
-      } else {
-        throw new Error(data?.error || 'Invalid token')
-      }
-    } catch (err) {
-      throw err
+    const res = await fetch('/api/verify-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: inputToken })
+    })
+    const data = await res.json()
+    if (res.ok && data.valid) {
+      setToken(inputToken)
+      setVerified(true)
+    } else {
+      throw new Error(data?.error || 'Invalid token')
     }
   }
 
@@ -29,7 +25,7 @@ export default function App() {
     <div className="app-shell">
       {!verified
         ? <TokenModal onVerify={verifyToken} />
-        : <ChatBox token={token} onLogout={() => { setVerified(false); setToken('') }} />}
+        : <ChatBox token={token} />}
     </div>
   )
 }
