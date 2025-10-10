@@ -1,3 +1,4 @@
+// src/ChatBox.jsx
 import React, { useState } from 'react'
 
 export default function ChatBox({ token }) {
@@ -7,7 +8,7 @@ export default function ChatBox({ token }) {
   async function sendMessage() {
     if (!input.trim()) return
 
-    // Add temporary "Typing..." message
+    // Show "Typing..." placeholder
     setMessages(prev => [...prev, { sender: 'You', text: input }, { sender: 'Copilot', text: 'Typing...', raw: null }])
 
     try {
@@ -21,13 +22,13 @@ export default function ChatBox({ token }) {
       let data
       try { data = JSON.parse(text) } catch { data = { message: text } }
 
-      console.log('🔍 Full API Response:', data)
-
-      const reply = data?.message || data?.body?.message || data?.raw?.message || "No message found."
+      // We now expect { message, raw } from the proxy
+      const reply = data?.message ?? 'No message found.'
+      const raw = data?.raw ?? data
 
       setMessages(prev => [
         ...prev.slice(0, -1),
-        { sender: 'Copilot', text: reply, raw: data }
+        { sender: 'Copilot', text: reply, raw }
       ])
     } catch (err) {
       setMessages(prev => [
@@ -43,13 +44,14 @@ export default function ChatBox({ token }) {
     <div>
       <div className="header">
         <h2>Cyara Copilot — External KB</h2>
+        {/* No "Change Token" button by request */}
       </div>
 
       <div className="chat-box" id="chat">
         {messages.map((m, i) => (
           <div key={i} className={['msg', m.sender.toLowerCase()].join(' ')}>
             <strong>{m.sender}:</strong> <span>{m.text}</span>
-            {m.raw && (
+            {m.sender === 'Copilot' && m.raw && (
               <details style={{ marginTop: '6px', background:'#f8f9fa', borderRadius:'6px', padding:'6px' }}>
                 <summary style={{ cursor: 'pointer', color:'#444', fontSize:'13px' }}>Full JSON Response</summary>
                 <pre style={{ fontSize:'12px', overflowX:'auto', whiteSpace:'pre-wrap' }}>
