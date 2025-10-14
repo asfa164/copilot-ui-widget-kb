@@ -33,7 +33,8 @@ export default async function handler(req, res) {
     // Call upstream (hidden from client)
     const upstreamRes = await fetch(upstream, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${expected}` },
+      headers: { 'Content-Type': 'application/json' },
+
       body: JSON.stringify(payload)
     })
 
