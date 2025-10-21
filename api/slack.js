@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       return res.status(200).send(JSON.stringify({ challenge: payload.challenge }));
     }
 
-    // --- 3️⃣ Ack immediately (must reply <3s) ---
+    // --- 3️⃣ Ack immediately (Slack expects <3s response) ---
     res.status(200).send("OK");
     console.log("✅ Ack sent to Slack");
 
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     // --- 5️⃣ Verify environment variables ---
     console.log("🔍 ENV CHECK", {
       BASE_URL: process.env.BASE_URL,
-      AUTH_TOKEN: process.env.AUTH_TOKEN ? "✅ exists" : "❌ missing",
+      API_TOKEN: process.env.API_TOKEN ? "✅ exists" : "❌ missing",
       SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN ? "✅ exists" : "❌ missing",
     });
 
@@ -54,7 +54,7 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.AUTH_TOKEN}`,
+        Authorization: `Bearer ${process.env.API_TOKEN}`,
       },
       body: JSON.stringify({ message: text, source: "slack" }),
     }).catch((err) => {
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         channel: event.channel,
         text: reply,
-        thread_ts: event.ts, // replies in same thread if applicable
+        thread_ts: event.ts, // replies in thread if applicable
       }),
     });
 
