@@ -1,65 +1,47 @@
-// Disable body parsing for Slack event verification
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
   console.log("⚡ Incoming Slack request");
 
-  if (req.method !== "POST") {
-    return res.status(200).send("OK");
-  }
+  if (req.method !== "POST") return res.status(200).send("OK");
 
   try {
-    // --- 1️⃣ Read raw body (Slack requirement) ---
+    // --- 1️⃣ Parse raw Slack body ---
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    for await (const c of req) chunks.push(c);
     const rawBody = Buffer.concat(chunks).toString("utf8");
-
     let payload = {};
-    try {
-      payload = JSON.parse(rawBody);
-    } catch (err) {
-      console.error("❌ JSON parse error:", err);
-    }
+    try { payload = JSON.parse(rawBody); } catch { console.error("❌ Bad JSON"); }
 
-    // --- 2️⃣ Slack verification (first handshake) ---
+    // --- 2️⃣ Slack verification ---
     if (payload.type === "url_verification" && payload.challenge) {
-      console.log("✅ Responding to Slack challenge");
       res.setHeader("Content-Type", "application/json");
       return res.status(200).send(JSON.stringify({ challenge: payload.challenge }));
     }
 
-    // --- 3️⃣ Ack Slack immediately (<3s) ---
+    // --- 3️⃣ Ack early ---
     res.status(200).send("OK");
     console.log("✅ Ack sent to Slack");
 
-    // --- 4️⃣ Extract Slack message event ---
-    const event = payload.event;
-    if (!event) return console.log("⚠️ No event object found");
-    if (event.bot_id || event.subtype === "bot_message") return console.log("🤖 Ignored bot message");
-
-    const text = (event.text || "").replace(/<@[^>]+>/g, "").trim();
+    // --- 4️⃣ Extract message ---
+    const ev = payload.event;
+    if (!ev || ev.bot_id) return;
+    const text = (ev.text || "").replace(/<@[^>]+>/g, "").trim();
     console.log("💬 User text:", text);
 
-    // --- 5️⃣ Check environment variables ---
-    const CYARA_API_URL =
-      process.env.CYARA_API_URL ||
-      "https://7jfvvi4m0g.execute-api.us-east-1.amazonaws.com/api/dev/external";
+    // --- 5️⃣ Env vars ---
+    const CYARA_API_URL = process.env.CYARA_API_URL;
     const CYARA_AUTH_TOKEN = process.env.CYARA_AUTH_TOKEN;
     const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
-
     console.log("🔍 ENV CHECK", {
       CYARA_API_URL,
       CYARA_AUTH_TOKEN: CYARA_AUTH_TOKEN ? "✅ exists" : "❌ missing",
       SLACK_BOT_TOKEN: SLACK_BOT_TOKEN ? "✅ exists" : "❌ missing",
     });
+    if (!CYARA_API_URL || !CYARA_AUTH_TOKEN || !SLACK_BOT_TOKEN) return;
 
-    if (!CYARA_AUTH_TOKEN || !SLACK_BOT_TOKEN) {
-      console.error("❌ Missing environment variables");
-      return;
-    }
-
-    // --- 6️⃣ Build payload (same as Python version) ---
-    const cyaraPayload = {
+    // --- 6️⃣ Payload identical to Python test ---
+    const body = {
       message: text,
       sessionAttributes: {
         product: "voice_assure",
@@ -67,88 +49,70 @@ export default async function handler(req, res) {
         auth_token: CYARA_AUTH_TOKEN,
       },
     };
+    console.log("📦 Payload:", JSON.stringify(body));
 
-    console.log("📦 Payload:", JSON.stringify(cyaraPayload));
+    // --- 7️⃣ Call Cyara API with timeout ---
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const start = Date.now();
 
-    // --- 7️⃣ Send request to Cyara external API ---
-    const startTime = Date.now();
-    let cyaraResp;
+    let resp, raw;
     try {
-      cyaraResp = await fetch(CYARA_API_URL, {
+      resp = await fetch(CYARA_API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cyaraPayload),
+        body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
+
+      const ms = Date.now() - start;
+      console.log(`⏱️ CYARA responded in ${ms} ms, status: ${resp.status}`);
+
+      raw = await resp.text();
+      console.log("📩 CYARA raw response:", raw);
     } catch (err) {
-      console.error("🔥 Network/Fetch error:", err.message);
-      await postFallback(SLACK_BOT_TOKEN, event.channel, event.ts);
+      console.error("🔥 Fetch failed:", err.name, err.message);
+      await postFallback(SLACK_BOT_TOKEN, ev.channel, ev.ts);
       return;
     }
 
-    const endTime = Date.now();
-    const elapsedTime = ((endTime - startTime) / 1000).toFixed(2);
-    console.log(`⏱️ Elapsed time: ${elapsedTime}s`);
-
-    console.log("🛰️ CYARA API HTTP status:", cyaraResp.status);
-
-    // --- 8️⃣ Read raw text + attempt JSON parse ---
-    const rawText = await cyaraResp.text();
-    console.log("📩 CYARA raw response:", rawText);
-
-    let data = {};
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      console.error("❌ Response not valid JSON, using raw text");
-      data = { message: rawText };
-    }
-
-    // --- 9️⃣ Determine reply text for Slack ---
-    const reply =
-      data.reply ||
-      data.message ||
-      data.response ||
-      "⚠️ Cyara API did not return a valid reply.";
-
+    let data;
+    try { data = JSON.parse(raw); } catch { data = { message: raw }; }
+    const reply = data.reply || data.message || data.response || "⚠️ No reply field in API response.";
     console.log("💬 Reply to Slack:", reply);
 
-    // --- 🔟 Post reply back to Slack ---
-    const slackResp = await fetch("https://slack.com/api/chat.postMessage", {
+    // --- 8️⃣ Send message to Slack ---
+    const s = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
       },
-      body: JSON.stringify({
-        channel: event.channel,
-        text: reply,
-        thread_ts: event.ts,
-      }),
+      body: JSON.stringify({ channel: ev.channel, text: reply, thread_ts: ev.ts }),
     });
-
-    const slackResult = await slackResp.json();
-    console.log("📡 Slack API result:", slackResult);
-  } catch (err) {
-    console.error("🔥 Slack handler exception:", err);
+    console.log("📡 Slack API result:", await s.json());
+  } catch (e) {
+    console.error("🔥 Slack handler exception:", e);
   }
 }
 
-// --- Helper for fallback Slack message ---
-async function postFallback(botToken, channel, threadTs) {
+// --- fallback helper ---
+async function postFallback(token, ch, ts) {
   try {
     await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${botToken}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        channel,
-        text: "⚠️ Sorry, I couldn’t reach Cyara API right now. Please try again shortly.",
-        thread_ts: threadTs,
+        channel: ch,
+        text: "⚠️ Cyara API did not respond. Please try again later.",
+        thread_ts: ts,
       }),
     });
-  } catch (err) {
-    console.error("❌ Fallback message failed:", err);
+  } catch (e) {
+    console.error("❌ Fallback post failed:", e);
   }
 }
