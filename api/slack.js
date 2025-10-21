@@ -1,33 +1,56 @@
+import chatHandler from "./chat.js";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const AUTH_TOKEN = process.env.AUTH_TOKEN;
-  const { text, user_name } = req.body; // from Slack slash command
-
-  try {
-    const response = await fetch(`${process.env.BASE_URL}/api/query`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${AUTH_TOKEN}`,
-      },
-      body: JSON.stringify({
-        query: text,
-        source: "slack",
-        user: user_name,
-      }),
+  // Slack sends data as form-encoded (not JSON)
+  let text = "";
+  let user_name = "";
+  if (req.headers["content-type"]?.includes("application/x-www-form-urlencoded")) {
+    const raw = await new Promise((resolve) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk.toString()));
+      req.on("end", () => resolve(body));
     });
-
-    const data = await response.json();
-
-    res.status(200).json({
-      response_type: "in_channel",
-      text: data.reply || "No response received from Copilot API.",
-    });
-  } catch (err) {
-    console.error("Slack handler error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    const params = new URLSearchParams(raw);
+    text = params.get("text") || "";
+    user_name = params.get("user_name") || "";
+  } else {
+    const body = req.body || {};
+    text = body.text || "";
+    user_name = body.user_name || "";
   }
+
+  // Build mock request to reuse chatHandler logic
+  const mockReq = {
+    method: "POST",
+    body: {
+      message: text,
+      source: "slack",
+      user: user_name,
+    },
+    headers: {
+      authorization: `Bearer ${process.env.AUTH_TOKEN}`,
+    },
+  };
+
+  // Capture chat.js response
+  const resultData = await new Promise((resolve) => {
+    const mockRes = {
+      status: (code) => ({
+        json: (data) => resolve({ code, data }),
+      }),
+    };
+    chatHandler(mockReq, mockRes);
+  });
+
+  const result = resultData?.data || {};
+  const reply = result.reply || result.response || "No response received.";
+
+  return res.status(200).json({
+    response_type: "in_channel",
+    text: reply,
+  });
 }
