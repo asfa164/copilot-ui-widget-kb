@@ -1,7 +1,6 @@
 // Disable body parsing (Slack needs raw body)
 export const config = { api: { bodyParser: false } };
 
-// Slack Event Handler
 export default async function handler(req, res) {
   console.log("⚡ Incoming Slack request");
 
@@ -23,14 +22,14 @@ export default async function handler(req, res) {
       console.error("❌ JSON parse error:", err);
     }
 
-    // --- 2️⃣ Handle Slack URL verification ---
+    // --- 2️⃣ Slack URL verification ---
     if (payload.type === "url_verification" && payload.challenge) {
       console.log("✅ Responding to Slack challenge");
       res.setHeader("Content-Type", "application/json");
       return res.status(200).send(JSON.stringify({ challenge: payload.challenge }));
     }
 
-    // --- 3️⃣ Ack immediately (Slack expects <3s response) ---
+    // --- 3️⃣ Acknowledge Slack immediately ---
     res.status(200).send("OK");
     console.log("✅ Ack sent to Slack");
 
@@ -42,40 +41,52 @@ export default async function handler(req, res) {
     const text = (event.text || "").replace(/<@[^>]+>/g, "").trim();
     console.log("💬 User text:", text);
 
-    // --- 5️⃣ Verify environment variables ---
+    // --- 5️⃣ Check environment variables ---
     console.log("🔍 ENV CHECK", {
       BASE_URL: process.env.BASE_URL,
       API_TOKEN: process.env.API_TOKEN ? "✅ exists" : "❌ missing",
       SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN ? "✅ exists" : "❌ missing",
     });
 
-    // --- 6️⃣ Send to your backend (Copilot Chat) ---
-    const aiResp = await fetch(`${process.env.BASE_URL}/api/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.API_TOKEN}`,
-      },
-      body: JSON.stringify({ message: text, source: "slack" }),
-    }).catch((err) => {
-      console.error("🔥 Copilot request error:", err);
-      return null;
-    });
+    // --- 6️⃣ Call Copilot backend ---
+    const base = process.env.BASE_URL.replace(/\/+$/, "");
+    const url = `${base}/api/chat`;
+    console.log("🧭 Calling Copilot endpoint:", url);
 
-    if (!aiResp) return console.error("❌ Copilot backend unreachable");
+    let aiResp;
+    try {
+      aiResp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.API_TOKEN}`,
+        },
+        body: JSON.stringify({ message: text, source: "slack" }),
+      });
+    } catch (err) {
+      console.error("🔥 Network/Fetch error:", err.message);
+      aiResp = null;
+    }
 
-    console.log("🛰️ Sent to Copilot backend:", aiResp.status);
-    const data = await aiResp.json().catch((err) => {
-      console.error("❌ Error parsing Copilot JSON:", err);
-      return {};
-    });
+    if (!aiResp) {
+      console.error("❌ No response received from backend");
+      return;
+    }
 
-    console.log("📥 Copilot reply data:", data);
+    console.log("🛰️ Copilot backend HTTP status:", aiResp.status);
 
-    const reply = data.reply || data.response || "No response received.";
+    let data = {};
+    try {
+      data = await aiResp.json();
+      console.log("📥 Copilot backend response:", data);
+    } catch (err) {
+      console.error("❌ Failed to parse Copilot JSON:", err.message);
+    }
+
+    const reply = data.reply || data.response || `No valid reply (status ${aiResp.status})`;
     console.log("💬 Reply to Slack:", reply);
 
-    // --- 7️⃣ Post reply to Slack ---
+    // --- 7️⃣ Send reply to Slack ---
     const slackResp = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
@@ -85,7 +96,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         channel: event.channel,
         text: reply,
-        thread_ts: event.ts, // replies in thread if applicable
+        thread_ts: event.ts, // reply in thread
       }),
     });
 
