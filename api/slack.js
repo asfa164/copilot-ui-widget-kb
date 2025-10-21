@@ -1,3 +1,5 @@
+console.log("🚀 Received Slack Event:", req.method, req.url);
+
 // --- Disable body parsing so Slack's raw request isn't corrupted ---
 export const config = {
   api: { bodyParser: false },
