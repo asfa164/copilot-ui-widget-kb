@@ -1,78 +1,58 @@
 // /api/slack.js
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(200).send("OK");
   }
 
-  // Read raw body (Vercel's serverless doesn't auto-parse)
-  const raw = await new Promise((resolve) => {
-    let data = "";
-    req.on("data", (chunk) => (data += chunk.toString()));
-    req.on("end", () => resolve(data || ""));
+  // --- Parse body safely ---
+  let body = "";
+  await new Promise((resolve) => {
+    req.on("data", (chunk) => (body += chunk.toString()));
+    req.on("end", resolve);
   });
 
-  const ct = req.headers["content-type"] || "";
   let payload = {};
-
   try {
-    if (ct.includes("application/json")) {
-      payload = raw ? JSON.parse(raw) : {};
-    } else if (ct.includes("application/x-www-form-urlencoded")) {
-      payload = Object.fromEntries(new URLSearchParams(raw));
-      // If Slack wrapped JSON as 'payload', unwrap it (used by some interactions)
-      if (payload.payload) {
-        payload = JSON.parse(payload.payload);
-      }
-    }
+    payload = JSON.parse(body);
   } catch (e) {
-    console.error("Body parse error:", e);
-    return res.status(400).json({ error: "Invalid body" });
+    console.log("Non-JSON body, skipping parse");
   }
 
-  // 1) URL Verification
-  if (payload && payload.challenge) {
+  // --- ✅ Step 1: Handle Slack's verification challenge ---
+  if (payload && payload.type === "url_verification" && payload.challenge) {
+    console.log("Responding to Slack URL verification");
     return res.status(200).json({ challenge: payload.challenge });
   }
 
-  // 2) Events API
+  // --- ✅ Step 2: Handle Slack events (normal flow) ---
   const event = payload.event;
-  if (!event) {
-    // Could be a slash command or other type later; just ack.
-    return res.status(200).end();
-  }
+  if (!event) return res.status(200).send("No event");
 
-  // Avoid bot loops
+  // Ignore bot messages to prevent loops
   if (event.bot_id || event.subtype === "bot_message") {
-    return res.status(200).end();
+    return res.status(200).send("Ignored bot message");
   }
 
-  // Only handle app mentions in channels or direct messages to the bot
-  const isMention = event.type === "app_mention";
-  const isDM = event.channel_type === "im";
-
-  if (isMention || isDM) {
-    // Strip bot mention from the text for cleaner query
-    const text = (event.text || "").replace(/<@[^>]+>/g, "").trim();
+  // Handle messages or mentions
+  if (event.type === "app_mention" || event.channel_type === "im") {
+    const userText = (event.text || "").replace(/<@[^>]+>/g, "").trim();
 
     try {
-      // Call your backend chat endpoint
-      const resp = await fetch(`${process.env.BASE_URL}/api/chat`, {
+      const aiResponse = await fetch(`${process.env.BASE_URL}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${process.env.AUTH_TOKEN}`,
         },
-        body: JSON.stringify({
-          message: text,
-          source: "slack",
-        }),
+        body: JSON.stringify({ message: userText, source: "slack" }),
       });
 
-      const data = await resp.json();
+      const data = await aiResponse.json();
       const reply =
         data.reply || data.response || "Sorry, I couldn’t generate a reply.";
 
-      // Post message back to Slack (in-thread)
+      // Send back to Slack
       await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: {
@@ -90,6 +70,5 @@ export default async function handler(req, res) {
     }
   }
 
-  // Always 200 within 3s to keep Slack happy
-  return res.status(200).end();
+  res.status(200).send("OK");
 }
