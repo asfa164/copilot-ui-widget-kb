@@ -5,7 +5,7 @@ export const config = { api: { bodyParser: false } };
 // --- Imports ---
 import crypto from "crypto";
 import { WebClient } from "@slack/web-api";
-import fetch from "node-fetch";
+
 
 // --- Helper: Read raw request body ---
 async function readRawBody(req) {
