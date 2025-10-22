@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import fetch from "node-fetch";
+
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
