@@ -7,9 +7,11 @@ const CYARA_API_URL =
   process.env.CYARA_API_URL ||
   "https://7jfvvi4m0g.execute-api.us-east-1.amazonaws.com/api/dev/external";
 
+// Verify Slack request (HMAC)
 function verifySlackRequest(headers, rawBody) {
   const ts = headers.get("x-slack-request-timestamp");
   const sig = headers.get("x-slack-signature");
+  if (!ts || !sig) return false;
   if (Math.abs(Date.now() / 1000 - Number(ts)) > 60 * 5) return false;
 
   const base = `v0:${ts}:${rawBody}`;
@@ -24,24 +26,9 @@ function verifySlackRequest(headers, rawBody) {
   );
 }
 
-async function getNluResponse(query) {
-  try {
-    const r = await fetch(CYARA_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-    });
-    const t = await r.text();
-    const j = tryParseJSON(t);
-    return j?.message || j?.reply || t;
-  } catch (e) {
-    console.error("NLU fail:", e);
-    return "⚠️ NLU service error.";
-  }
-}
-
+// Post message to Slack
 async function postToSlack(channel, text) {
-  const r = await fetch("https://slack.com/api/chat.postMessage", {
+  const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -49,11 +36,36 @@ async function postToSlack(channel, text) {
     },
     body: JSON.stringify({ channel, text }),
   });
-  const d = await r.json();
-  if (!d.ok) console.error("Slack post failed:", d);
-  else console.log("✅ Sent to Slack:", d.ts);
+  const data = await res.json();
+  if (!data.ok) console.error("❌ Slack post failed:", data);
+  else console.log("✅ Sent to Slack:", data.ts);
 }
 
+// Extract only the `message` field from NLU JSON
+async function getNluMessage(query) {
+  try {
+    const r = await fetch(CYARA_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    const text = await r.text();
+    const json = tryParseJSON(text);
+
+    if (json && typeof json === "object" && json.message)
+      return json.message.trim();
+
+    return (
+      (typeof text === "string" && text.trim()) ||
+      "⚠️ No valid message field found in response."
+    );
+  } catch (e) {
+    console.error("NLU call failed:", e);
+    return "⚠️ Error contacting backend.";
+  }
+}
+
+// Parse JSON safely
 function tryParseJSON(s) {
   try {
     return JSON.parse(s);
@@ -73,8 +85,8 @@ export async function POST(req) {
   const event = body.event || {};
   if (event.type === "message" && !event.bot_id) {
     console.log("💬 Message:", event.text);
-    const reply = await getNluResponse(event.text);
-    await postToSlack(event.channel, reply);
+    const msg = await getNluMessage(event.text);
+    await postToSlack(event.channel, msg);
   }
 
   return new Response("", { status: 200 });
